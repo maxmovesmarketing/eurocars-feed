@@ -1,0 +1,69 @@
+name: feed
+
+on:
+  schedule:
+    - cron: "15 4 * * *"   # elke nacht 04:15 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: feed
+  cancel-in-progress: false
+
+jobs:
+  feed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      DATA_DIR: site
+      LAMA_MODEL: model/big-lama.pt
+      PUBLIC_BASE_URL: https://maxmovesmarketing.github.io/eurocars-feed
+    steps:
+      - uses: actions/checkout@v4
+      - name: Vorige output (cache met schone foto's)
+        run: |
+          git clone --depth 1 --branch gh-pages "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" site || mkdir -p site
+          rm -rf site/.git
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Modellen (cache)
+        uses: actions/cache@v4
+        with:
+          path: |
+            model
+            ~/.u2net
+          key: modellen-v1
+      - name: Installeren
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+          mkdir -p model
+          [ -f model/big-lama.pt ] || curl -fsSL -o model/big-lama.pt https://github.com/enesmsahin/simple-lama-inpainting/releases/download/v0.1.0/big-lama.pt
+      - name: Feed maken
+        run: python -m src.main
+      - name: Controle
+        run: |
+          python - <<'EOF'
+          import json, sys, xml.etree.ElementTree as ET
+          st = json.load(open("site/status.json"))
+          print({k: st.get(k) for k in ("ok", "gevonden", "in_feed", "per_vestiging", "error")})
+          if not st.get("ok"):
+              sys.exit("run mislukt, vorige feed blijft staan")
+          n = len(ET.parse("site/feed.xml").getroot().findall(".//item"))
+          if n < 50:
+              sys.exit(f"maar {n} auto's, niet publiceren")
+          EOF
+      - name: Publiceren (gh-pages, één commit)
+        run: |
+          cd site
+          touch .nojekyll
+          git init -q -b gh-pages
+          git config user.name "eurocars-feed"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -qm "feed $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -qf "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" gh-pages
