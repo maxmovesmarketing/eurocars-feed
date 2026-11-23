@@ -107,7 +107,11 @@ def _fixed_mask(im, t):
         ref = cv2.imread(str(ASSETS / f"logo_1024_{t}.png"), 0)
         logo = cv2.resize(ref, (w, h), interpolation=cv2.INTER_NEAREST) if ref is not None else None
     if logo is not None:
-        m = np.maximum(m, cv2.dilate(logo, np.ones((int(13 * s) | 1,) * 2, np.uint8)))
+        # alleen als het award-logo er echt op staat (nieuwere sjablonen hebben het niet)
+        hsv = cv2.cvtColor(im, cv2.COLOR_BGR2HSV)
+        gold = (hsv[..., 0] >= 5) & (hsv[..., 0] <= 32) & (hsv[..., 1] > 100) & (hsv[..., 2] > 100)
+        if gold[logo > 0].mean() > 0.35:
+            m = np.maximum(m, cv2.dilate(logo, np.ones((int(13 * s) | 1,) * 2, np.uint8)))
     return m
 
 
@@ -311,13 +315,18 @@ def clean(im: np.ndarray) -> np.ndarray | None:
     h, w = im.shape[:2]
     s = w / 1024
     out = _inpaint(im, build_mask(im, t, car))
+    # de oranje rand rechts bedekte daar alles; wegsnijden i.p.v. verzinnen
+    out = out[:, : int(984 * s)]
     if t == "letterbox":
         out = out[int(43 * s): int(725 * s)]  # alleen de witte Hexon-opvulbalken
     return trim_borders(out)
 
 
+ALGO = "v3"  # ophogen als de schoonmaak verandert: dan worden alle foto's opnieuw gemaakt
+
+
 def _version(r: httpx.Response) -> str:
-    return f"{r.headers.get('last-modified', '')}|{r.headers.get('content-length', '')}"
+    return f"{ALGO}|{r.headers.get('last-modified', '')}|{r.headers.get('content-length', '')}"
 
 
 async def prepare(client: httpx.AsyncClient, vehicles: list[Vehicle]) -> tuple[list[Vehicle], dict]:
